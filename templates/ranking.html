@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Model ranking · Earnings Signal{% endblock %}
+{% block main_class %}wrap-wide{% endblock %}
+
+{% block content %}
+
+{% if missing_config %}
+  <section class="panel panel-warn">
+    <h2>Setup needed</h2>
+    <p>Supabase isn't configured yet, so there are no models to rank. See <code>README.md</code>.</p>
+  </section>
+{% endif %}
+
+<section class="panel" id="leaderboard-section">
+  <h2>Leaderboard</h2>
+  <p class="panel-lede">Models are ranked by how strong their out-of-sample evidence is, not just their best number. The score is the low end of each model's 95% range for rank correlation (IC): a high IC from a few hundred tests has a wide range and a low floor, so it can't top a steadier result measured on thousands.</p>
+
+  <div class="filter-row">
+    <label for="rank-focus">Rank by</label>
+    <select id="rank-focus">
+      {% for f in focuses %}<option value="{{ f }}">{{ 'All horizons (average)' if f == 'overall' else f ~ ' horizon' }}</option>{% endfor %}
+    </select>
+  </div>
+
+  <figure class="chart-card chart-card-wide" id="chart-forest">
+    <figcaption>
+      <span class="chart-title">IC with its 95% range</span>
+      <span class="chart-sub" id="forest-sub"></span>
+    </figcaption>
+    <div class="chart-body"></div>
+  </figure>
+
+  <div class="table-scroll">
+    <table class="data-table" id="leaderboard"></table>
+  </div>
+  <div id="unrankable" class="field-hint"></div>
+</section>
+
+<section class="panel" id="common-section">
+  <h2>What the better models have in common</h2>
+  <p class="panel-lede">How each model's training data and settings line up with its score. Correlations across a handful of models are hints about where to look, not proof.</p>
+  <div id="common-body"></div>
+  <h3 class="subhead">Training profiles</h3>
+  <div class="table-scroll" id="profiles"></div>
+</section>
+
+<section class="panel" id="compare-section">
+  <h2>Head to head: why one model beats another</h2>
+  <p class="panel-lede">Pick two models. The findings check whether the gap is statistically real, then look for differences in what they were trained on, how they were set up, and which inputs they actually rely on.</p>
+
+  <div class="filter-row">
+    <label for="cmp-a">Model A</label>
+    <select id="cmp-a"></select>
+    <label for="cmp-b">Model B</label>
+    <select id="cmp-b"></select>
+  </div>
+
+  <div class="compare-grid">
+    <div>
+      <h3 class="subhead subhead-tight">Findings</h3>
+      <ol class="findings" id="findings"></ol>
+      <h3 class="subhead">Experiments that would confirm a cause</h3>
+      <ul class="experiments" id="experiments"></ul>
+    </div>
+    <figure class="chart-card" id="chart-cmp-ic">
+      <figcaption>
+        <span class="chart-title">IC by horizon</span>
+        <span class="chart-sub">Dot = out-of-sample IC; line = its 95% range. Overlapping lines mean the gap may be luck.</span>
+      </figcaption>
+      <div class="chart-body"></div>
+    </figure>
+  </div>
+
+  <div class="chart-grid compare-charts">
+    <figure class="chart-card" id="chart-importance">
+      <figcaption>
+        <span class="chart-title">What each model relies on</span>
+        <span class="chart-sub">IC lost when each input group is scrambled in the test years. Bigger = leans on it more; near zero = unused.</span>
+      </figcaption>
+      <div class="range-row" id="importance-horizon" role="group" aria-label="Horizon"></div>
+      <div class="chart-body"></div>
+    </figure>
+    <figure class="chart-card" id="chart-sectors">
+      <figcaption>
+        <span class="chart-title">What each model was trained on</span>
+        <span class="chart-sub">Share of training reports by sector</span>
+      </figcaption>
+      <div class="chart-body"></div>
+    </figure>
+  </div>
+</section>
+
+<div class="viz-tooltip hidden" id="viz-tooltip" role="status"></div>
+<script id="ranking-data" type="application/json">{{ payload|tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='charts.js') }}"></script>
+<script src="{{ url_for('static', filename='ranking.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}Testing rig · Earnings Signal{% endblock %}
+{% block main_class %}wrap-wide{% endblock %}
+
+{% block content %}
+
+{% if missing_config %}
+  <section class="panel panel-warn">
+    <h2>Setup needed</h2>
+    <p>Supabase and the SEC User-Agent aren't configured yet, so there's nothing to test. See <code>README.md</code>.</p>
+  </section>
+{% endif %}
+{% if migration_needed %}
+  <section class="panel panel-warn">
+    <h2>Database update needed</h2>
+    <p>Run <code>migrations/002_named_and_batch_predictions.sql</code> in the Supabase SQL editor to enable batch testing.</p>
+  </section>
+{% endif %}
+
+<!-- ------------------------------------------------------------ models -->
+<section class="panel" id="models-section">
+  <h2>Model accuracy</h2>
+  <p class="panel-lede">Out-of-sample results from each model's walk-forward evaluation: every number comes from years the model hadn't seen when it made the prediction.</p>
+
+  <div class="filter-row">
+    <label for="rig-model">Model</label>
+    <select id="rig-model">
+      {% for m in models %}
+        <option value="{{ m.id }}">{{ m.name }} &middot; {{ m.created_at[:10] if m.created_at else '' }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div id="model-empty" class="field-hint hidden"></div>
+  <div id="model-body">
+    <div class="kpi-row" id="model-kpis"></div>
+
+    <div class="chart-grid">
+      <figure class="chart-card" id="chart-edge">
+        <figcaption>
+          <span class="chart-title">Edge over baseline</span>
+          <span class="chart-sub">Directional accuracy minus "always guess the more common direction", in points</span>
+        </figcaption>
+        <div class="chart-body"></div>
+      </figure>
+
+      <figure class="chart-card" id="chart-ic-years">
+        <figcaption>
+          <span class="chart-title">Rank correlation (IC) by test year</span>
+          <span class="chart-sub">Above zero = the model ranked stocks better than chance that year</span>
+        </figcaption>
+        <div class="chart-body"></div>
+      </figure>
+
+      <figure class="chart-card" id="chart-families">
+        <figcaption>
+          <span class="chart-title">Which model family earns its place</span>
+          <span class="chart-sub">IC per horizon for the network ensemble, boosted trees and their blend</span>
+        </figcaption>
+        <div class="chart-body"></div>
+      </figure>
+
+      <figure class="chart-card" id="chart-spread">
+        <figcaption>
+          <span class="chart-title">Top picks vs bottom picks</span>
+          <span class="chart-sub">Average actual move of the model's top fifth minus its bottom fifth, % vs {{ benchmark }}</span>
+        </figcaption>
+        <div class="chart-body"></div>
+      </figure>
+    </div>
+  </div>
+
+  <h3 class="subhead">All saved models</h3>
+  <div class="table-scroll" id="all-models-table"></div>
+</section>
+
+<!-- ----------------------------------------------------------- batches -->
+<section class="panel" id="batch-section">
+  <h2>Batch predictions vs what actually happened</h2>
+  <p class="panel-lede">Each call is scored against the stock's real move relative to {{ benchmark }} over the same window. Closed windows are final; open ones track the latest traded price and move as the market does.</p>
+
+  <div class="filter-row">
+    <label for="rig-batch">Batch</label>
+    <select id="rig-batch">
+      {% for b in batches %}
+        <option value="{{ b.id }}">{{ b.name }} &middot; {{ (b.symbols or [])|length }} tickers &middot; {{ b.created_at[:10] if b.created_at else '' }}</option>
+      {% endfor %}
+    </select>
+    <label for="rig-horizon">Horizon</label>
+    <select id="rig-horizon">
+      {% for h in horizons %}<option value="{{ h }}"{{ ' selected' if h == '1w' }}>{{ h }}</option>{% endfor %}
+    </select>
+    <button type="button" class="btn-ghost" id="rig-refresh">Refresh prices</button>
+    <span class="live-status" id="live-status" aria-live="polite"></span>
+  </div>
+
+  {% if not batches %}
+    <p class="field-hint">No batches yet. Run one from the dashboard's <em>Batch predict</em> panel.</p>
+  {% endif %}
+
+  <div id="batch-body" class="{{ 'hidden' if not batches }}">
+    <div class="kpi-row" id="batch-kpis"></div>
+
+    <div class="chart-grid">
+      <figure class="chart-card chart-card-wide" id="chart-scatter">
+        <figcaption>
+          <span class="chart-title">Predicted vs actual</span>
+          <span class="chart-sub" id="scatter-sub"></span>
+        </figcaption>
+        <div class="chart-body"></div>
+      </figure>
+    </div>
+
+    <h3 class="subhead">Every ticker since its release <span class="muted">&middot; move vs {{ benchmark }}, click one for the price chart</span></h3>
+    <div class="multiples" id="multiples"></div>
+
+    <figure class="chart-card chart-card-wide" id="chart-detail">
+      <figcaption>
+        <span class="chart-title" id="detail-title">Price vs predictions</span>
+        <span class="chart-sub" id="detail-sub"></span>
+      </figcaption>
+      <div class="range-row" id="detail-range" role="group" aria-label="Time range">
+        <button type="button" data-range="1m">1M</button>
+        <button type="button" data-range="3m" class="is-active">3M</button>
+        <button type="button" data-range="6m">6M</button>
+        <button type="button" data-range="1y">1Y</button>
+      </div>
+      <div class="chart-body"></div>
+    </figure>
+  </div>
+</section>
+
+<div class="viz-tooltip hidden" id="viz-tooltip" role="status"></div>
+
+<script id="rig-models" type="application/json">{{ models|tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='charts.js') }}"></script>
+<script src="{{ url_for('static', filename='testing.js') }}"></script>
+{% endblock %}

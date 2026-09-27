@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Earnings Signal{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap header-row {{ self.main_class() }}">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Earnings Signal</span>
+      </div>
+      <p class="brand-sub">Reports in. Weighted moves out.</p>
+    </div>
+    <nav class="wrap site-tabs {{ self.main_class() }}" aria-label="Sections">
+      <a href="{{ url_for('index') }}" class="site-tab{{ ' is-active' if request.endpoint == 'index' }}"{% if request.endpoint == 'index' %} aria-current="page"{% endif %}>Dashboard</a>
+      <a href="{{ url_for('testing') }}" class="site-tab{{ ' is-active' if request.endpoint == 'testing' }}"{% if request.endpoint == 'testing' %} aria-current="page"{% endif %}>Testing rig</a>
+      <a href="{{ url_for('ranking_page') }}" class="site-tab{{ ' is-active' if request.endpoint == 'ranking_page' }}"{% if request.endpoint == 'ranking_page' %} aria-current="page"{% endif %}>Model ranking</a>
+    </nav>
+  </header>
+
+  <main class="wrap {% block main_class %}{% endblock %}">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap {{ self.main_class() }}">
+      <p>Trains on quarterly financials from SEC EDGAR filings and historical prices from Yahoo Finance. Not investment advice.</p>
+    </div>
+  </footer>
+
+  {% block scripts %}<script src="{{ url_for('static', filename='app.js') }}"></script>{% endblock %}
+</body>
+</html>

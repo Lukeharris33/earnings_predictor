@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+
+{% macro model_label(m) -%}
+  {{ m.name }} &middot; {% if m.target_scale and m.target_scale.version %}v{{ m.target_scale.version }}{% else %}v1{% endif %} &middot; {% if (m.symbols or [])|length > 6 %}{{ (m.symbols or [])|length }} tickers{% else %}{{ (m.symbols or [])|join(', ') }}{% endif %}
+{%- endmacro %}
+
+{% macro model_options(models) -%}
+  {% for m in models %}
+    <option value="{{ m.id }}">{{ model_label(m) }}</option>
+  {% endfor %}
+{%- endmacro %}
+
+{% block content %}
+
+{% if missing_config %}
+  <section class="panel panel-warn">
+    <h2>Setup needed</h2>
+    <p>These environment variables aren't set yet, so training and predictions are disabled:</p>
+    <ul class="mono-list">
+      {% for name in missing_config %}<li>{{ name }}</li>{% endfor %}
+    </ul>
+    <p>Copy <code>.env.example</code> to <code>.env</code>, fill it in, and restart the app. See <code>README.md</code> for the full setup walkthrough.</p>
+  </section>
+{% endif %}
+
+{% if migration_needed %}
+  <section class="panel panel-warn">
+    <h2>Database update needed</h2>
+    <p>Named and batch predictions need two new columns and a new table. Open Supabase &rarr; <strong>SQL Editor</strong>, paste in <code>migrations/002_named_and_batch_predictions.sql</code>, run it, and reload this page. Until then, predictions can't be saved.</p>
+  </section>
+{% endif %}
+
+<section class="panel" id="train-panel">
+  <h2>Train a model</h2>
+  <p class="panel-lede">Pulls each ticker's quarterly financials from its SEC filings (margins, growth, valuation, balance sheet, cash flow, trend vs. its own history) plus price momentum, and pairs them with how the stock did <em>relative to {{ benchmark }}</em> after the release: 1 day, then 1 week, 1 month and 1 year from the first post-release close. Each horizon gets its own model, scored walk-forward on years it never saw.</p>
+
+  <form id="train-form">
+    <label for="model-name">Model name</label>
+    <input type="text" id="model-name" maxlength="120" placeholder="e.g. Broad universe, blend" {{ 'disabled' if missing_config }}>
+
+    <label for="tickers">Tickers</label>
+    <textarea id="tickers" name="tickers" rows="3" placeholder="AAPL, MSFT, NVDA, JPM" {{ 'disabled' if missing_config }}></textarea>
+    <p class="field-hint">
+      Comma, space or newline separated.
+      <button type="button" class="btn-link" id="load-universe" {{ 'disabled' if missing_config }}>Load the starter universe ({{ universe_size }} tickers)</button>
+      &mdash; a few hundred companies across every sector, excluding {{ holdout_size }} tickers kept aside for out-of-sample batch tests. The first run downloads a lot from EDGAR and takes a while; later runs use the cache.
+    </p>
+
+    <div class="field-row field-row-3">
+      <div>
+        <label for="model-type">Model</label>
+        <select id="model-type" {{ 'disabled' if missing_config }}>
+          <option value="blend">Blend: network ensemble + boosted trees</option>
+          <option value="gbm">Boosted trees only (fastest)</option>
+          <option value="nn">Network ensemble only</option>
+        </select>
+      </div>
+      <div>
+        <label for="epochs">Max epochs</label>
+        <input type="number" id="epochs" name="epochs" value="150" min="10" max="1000" {{ 'disabled' if missing_config }}>
+      </div>
+      <div>
+        <label for="batch-size">Batch size</label>
+        <input type="number" id="batch-size" name="batch_size" value="64" min="4" max="1024" {{ 'disabled' if missing_config }}>
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary" {{ 'disabled' if missing_config }}>Start training</button>
+  </form>
+
+  <div id="train-status" class="train-status hidden">
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+    <p id="status-message" class="status-message">Warming up...</p>
+    <div id="status-metrics" class="hidden"></div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Predict one ticker</h2>
+  <form id="predict-form">
+    <div class="field-row">
+      <div>
+        <label for="model-select">Model</label>
+        <select id="model-select" class="model-select" {{ 'disabled' if missing_config }}>{{ model_options(models) }}</select>
+      </div>
+      <div>
+        <label for="predict-symbol">Ticker</label>
+        <input type="text" id="predict-symbol" placeholder="AAPL" {{ 'disabled' if missing_config }}>
+      </div>
+    </div>
+    <label for="predict-name">Prediction name <span class="field-hint">(optional)</span></label>
+    <input type="text" id="predict-name" maxlength="120" placeholder="e.g. MRNA after Q2 print" {{ 'disabled' if missing_config }}>
+    <button type="submit" class="btn btn-primary" {{ 'disabled' if missing_config or not models }}>Get decision</button>
+  </form>
+  {% if not models %}<p class="field-hint">No saved models yet -- train one above first.</p>{% endif %}
+
+  <div id="predict-result" class="predict-result hidden"></div>
+</section>
+
+<section class="panel" id="batch-panel">
+  <h2>Batch predict</h2>
+  <p class="panel-lede">Score many tickers with one model under a single group name. Every prediction is saved to Supabase under that name so you can compare batches later.</p>
+  <form id="batch-form">
+    <div class="field-row">
+      <div>
+        <label for="batch-name">Batch name</label>
+        <input type="text" id="batch-name" maxlength="120" placeholder="e.g. Holdout test, Sept 2026" {{ 'disabled' if missing_config }}>
+      </div>
+      <div>
+        <label for="batch-model">Model</label>
+        <select id="batch-model" class="model-select" {{ 'disabled' if missing_config }}>{{ model_options(models) }}</select>
+      </div>
+    </div>
+    <label for="batch-tickers">Tickers</label>
+    <textarea id="batch-tickers" rows="3" placeholder="MRNA, INTC, NKE, ..." {{ 'disabled' if missing_config }}></textarea>
+    <p class="field-hint"><button type="button" class="btn-link" id="load-holdout" {{ 'disabled' if missing_config }}>Load the {{ holdout_size }} holdout tickers</button> &mdash; the ones the starter universe leaves out, so a model trained on it has never seen them.</p>
+    <button type="submit" class="btn btn-primary" {{ 'disabled' if missing_config or not models or migration_needed }}>Run batch</button>
+  </form>
+
+  <div id="batch-status" class="train-status hidden">
+    <div class="progress-track"><div class="progress-fill" id="batch-progress-fill"></div></div>
+    <p id="batch-message" class="status-message"></p>
+  </div>
+  <div id="batch-result" class="predict-result hidden"></div>
+
+  <h3 class="subhead">Recent batches</h3>
+  {% if batches %}
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>Batch</th><th>Model</th><th>Scored</th>{% for h in horizons %}<th>{{ h }} buy / sell / hold</th>{% endfor %}<th>Created</th><th></th></tr></thead>
+      <tbody>
+        {% for b in batches %}
+        {% set s = b.summary or {} %}
+        <tr>
+          <td>{{ b.name }}</td>
+          <td>{{ b.models.name if b.models else '' }}</td>
+          <td class="mono">{{ s.n_ok if s.n_ok is defined else '-' }}/{{ (b.symbols or [])|length }}</td>
+          {% for h in horizons %}
+            {% set c = (s.counts or {}).get(h) %}
+            <td class="mono">{% if c %}<span class="c-buy">{{ c.BUY }}</span> / <span class="c-sell">{{ c.SELL }}</span> / <span class="c-hold">{{ c.HOLD }}</span>{% if c.CLOSED %} <span class="muted" title="Window already closed when the batch ran">+{{ c.CLOSED }} closed</span>{% endif %}{% else %}-{% endif %}</td>
+          {% endfor %}
+          <td class="mono">{{ b.created_at[:16]|replace('T', ' ') if b.created_at else '' }}</td>
+          <td><button type="button" class="btn-link view-batch" data-batch-id="{{ b.id }}">View</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <p class="field-hint">No batches yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Recent predictions</h2>
+  {% if predictions %}
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>Name</th><th>Ticker</th><th>Report</th>{% for h in horizons %}<th>{{ h }}</th>{% endfor %}<th>Model</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for p in predictions %}
+        <tr>
+          <td>{{ p.name or '—' }}{% if p.batch_id %} <span class="tag">batch</span>{% endif %}</td>
+          <td class="mono">{{ p.symbol }}</td>
+          <td class="mono">{{ p.earnings_date or '' }}</td>
+          {% for h in horizons %}
+            {% set d = (p.decisions or {}).get(h) %}
+            <td class="mono{{ ' is-closed' if d and d.closed }}"{% if d and d.closed %} title="Window closed {{ d.window_end }}{% if d.actual_pct_change is defined and d.actual_pct_change is not none %} · actual {{ '%+.1f'|format(d.actual_pct_change) }}%{% endif %}"{% endif %}>{% if d %}<span class="c-{{ d.action|lower }}">{{ d.action }}</span> {{ '%+.1f'|format(d.predicted_pct_change) }}%{% else %}-{% endif %}</td>
+          {% endfor %}
+          <td>{{ p.models.name if p.models else '' }}</td>
+          <td class="mono">{{ p.created_at[:16]|replace('T', ' ') if p.created_at else '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <p class="field-hint">No predictions yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Saved models</h2>
+  {% if models %}
+  <p class="field-hint">Out-of-sample directional accuracy, with the "always guess the more common direction" baseline and rank correlation (IC) underneath. Beating the baseline and a positive IC are what matter.</p>
+  <div class="table-scroll">
+    <table class="data-table" id="models-table">
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Trained</th>
+          <th>Tickers</th>
+          {% for h in horizons %}<th>{{ h }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in models %}
+        <tr>
+          <td>{{ m.name }}</td>
+          <td class="mono">{{ m.created_at[:16]|replace('T', ' ') if m.created_at else '' }}</td>
+          <td>{% if (m.symbols or [])|length > 6 %}{{ (m.symbols or [])|length }}{% else %}{{ (m.symbols or [])|join(', ') }}{% endif %}</td>
+          {% for h in horizons %}
+            {% set hm = (m.metrics or {}).get(h) %}
+            <td class="mono">
+              {% if hm and hm.directional_accuracy is defined %}
+                {{ (hm.directional_accuracy * 100)|round(1) }}%
+                {% if hm.baseline_majority_accuracy is defined %}
+                  <div class="metric-sub">base {{ (hm.baseline_majority_accuracy * 100)|round(1) }}% &middot; IC {{ '%+.3f'|format(hm.ic) if hm.ic is not none else '-' }}</div>
+                {% endif %}
+              {% else %}-{% endif %}
+            </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <p class="field-hint">Nothing saved yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Recent training runs</h2>
+  {% if runs %}
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>Status</th><th>Name</th><th>Tickers</th><th>Started</th><th>Warnings/Errors</th></tr></thead>
+      <tbody>
+        {% for r in runs %}
+        <tr>
+          <td><span class="status-pill status-{{ r.status }}">{{ r.status }}</span></td>
+          <td>{{ (r.config or {}).get('name', '') }}</td>
+          <td>{% if (r.symbols or [])|length > 6 %}{{ (r.symbols or [])|length }} tickers{% else %}{{ (r.symbols or [])|join(', ') }}{% endif %}</td>
+          <td class="mono">{{ r.started_at[:16]|replace('T', ' ') if r.started_at else '' }}</td>
+          <td class="mono">{{ r.error_count or 0 }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <p class="field-hint">No training runs yet.</p>
+  {% endif %}
+</section>
+
+{% endblock %}
