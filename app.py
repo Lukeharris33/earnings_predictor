@@ -3,11 +3,12 @@ import traceback
 
 from flask import Flask, jsonify, render_template, request
 
-from src import batch, diagnostics, ranking, testing_rig, trainer
+from src import batch, diagnostics, ranking, testing_rig, trainer, universe
 from src.config import config
 from src.data_pipeline import annotate_windows
 from src.predictor import predict_for_symbol
 from src.price_client import PriceClient
+from src.sec_client import SECClient
 from src.supabase_client import MigrationRequired, SupabaseLogger
 from src.universe import HOLDOUT_TICKERS, STARTER_UNIVERSE
 
@@ -34,7 +35,7 @@ def _log_route_error(stage: str, symbol: str, exc: Exception):
         except Exception:
             logger.exception("Failed to log route error to Supabase")
 
-
+#git
 def _parse_symbols(raw) -> list[str]:
     if isinstance(raw, list):
         raw = ",".join(raw)
@@ -212,6 +213,24 @@ def api_testing_live():
 @app.route("/api/universe")
 def api_universe():
     return jsonify({"universe": STARTER_UNIVERSE, "holdout": HOLDOUT_TICKERS})
+
+
+@app.route("/api/autofill/<kind>")
+def api_autofill(kind):
+    if kind not in ("train", "batch"):
+        return jsonify({"error": "kind must be train or batch"}), 404
+    exclude = []
+    model_id = request.args.get("model_id")
+    try:
+        if kind == "batch" and model_id:
+            db = _db_or_none()
+            if not db:
+                return jsonify({"error": "Supabase is not configured."}), 500
+            exclude = db.get_model(model_id).get("symbols") or []
+        return jsonify(universe.autofill(SECClient(), kind, exclude))
+    except Exception as exc:
+        logger.exception("Auto-fill failed")
+        return jsonify({"error": str(exc)}), 502
 
 
 @app.route("/api/train", methods=["POST"])

@@ -44,6 +44,9 @@
       Comma, space or newline separated.
       <button type="button" class="btn-link" id="load-universe" {{ 'disabled' if missing_config }}>Load the starter universe ({{ universe_size }} tickers)</button>
       &mdash; a few hundred companies across every sector, excluding {{ holdout_size }} tickers kept aside for out-of-sample batch tests. The first run downloads a lot from EDGAR and takes a while; later runs use the cache.
+      Or <button type="button" class="btn-link" id="autofill-train" {{ 'disabled' if missing_config }}>auto-fill as many as this machine can handle</button>
+      &mdash; the starter universe plus other NYSE/Nasdaq companies, never ones reserved for batch tests.
+      <span id="autofill-train-note"></span>
     </p>
 
     <div class="field-row field-row-3">
@@ -113,7 +116,10 @@
     </div>
     <label for="batch-tickers">Tickers</label>
     <textarea id="batch-tickers" rows="3" placeholder="MRNA, INTC, NKE, ..." {{ 'disabled' if missing_config }}></textarea>
-    <p class="field-hint"><button type="button" class="btn-link" id="load-holdout" {{ 'disabled' if missing_config }}>Load the {{ holdout_size }} holdout tickers</button> &mdash; the ones the starter universe leaves out, so a model trained on it has never seen them.</p>
+    <p class="field-hint"><button type="button" class="btn-link" id="load-holdout" {{ 'disabled' if missing_config }}>Load the {{ holdout_size }} holdout tickers</button> &mdash; the ones the starter universe leaves out, so a model trained on it has never seen them.
+      Or <button type="button" class="btn-link" id="autofill-batch" {{ 'disabled' if missing_config }}>auto-fill as many as this machine can handle</button>
+      &mdash; the holdout plus companies reserved for testing, minus anything the selected model trained on.
+      <span id="autofill-batch-note"></span></p>
     <button type="submit" class="btn btn-primary" {{ 'disabled' if missing_config or not models or migration_needed }}>Run batch</button>
   </form>
 

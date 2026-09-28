@@ -11,6 +11,13 @@ are logged as warnings during training and skipped.
 HOLDOUT_TICKERS are left out on purpose so batch tests on them are
 out-of-sample.
 """
+import hashlib
+import re
+import shutil
+from concurrent.futures import ThreadPoolExecutor
+
+from .config import config
+from .sec_client import SECAPIError, SECClient, normalize_symbol
 
 HOLDOUT_TICKERS = [
     "MRNA", "NVAX", "INTC", "EL", "NKE", "NVDA", "MSFT", "AMZN", "META", "TSLA",
@@ -85,3 +92,101 @@ UNIVERSE_BY_SECTOR = {
 }
 
 STARTER_UNIVERSE = [t for tickers in UNIVERSE_BY_SECTOR.values() for t in tickers]
+
+
+# ------------------------------------------------------------------ auto-fill
+# Beyond the starter universe, auto-fill draws on every NYSE/Nasdaq company
+# EDGAR lists. About 1 in TEST_SHARE of those is reserved for batch tests and
+# never auto-filled into training. The split hashes the ticker, so it doesn't
+# move when EDGAR reorders its list.
+LISTED_EXCHANGES = {"NYSE", "Nasdaq"}
+# Common and class shares (BRK-B); skips preferreds (BAC-PL) and the like.
+_COMMON_SHARE = re.compile(r"^[A-Z]{1,5}(-[A-Z])?$")
+TEST_SHARE = 6
+# Company facts + filing history + prices for one ticker not yet cached.
+NEW_TICKER_MB = 5.0
+
+
+def _reserved_for_tests(symbol: str) -> bool:
+    return int(hashlib.sha1(symbol.encode("utf-8")).hexdigest(), 16) % TEST_SHARE == 0
+
+
+def _listed(sec: SECClient) -> list[tuple[str, int]]:
+    """(ticker, cik) for NYSE/Nasdaq common stock, one ticker per company."""
+    seen_ciks, out = set(), []
+    for row in sec.get_listed_companies():
+        symbol = normalize_symbol(row.get("ticker") or "")
+        if row.get("exchange") not in LISTED_EXCHANGES or not _COMMON_SHARE.match(symbol):
+            continue
+        if row["cik"] in seen_ciks:
+            continue
+        seen_ciks.add(row["cik"])
+        out.append((symbol, int(row["cik"])))
+    return out
+
+
+def autofill(sec: SECClient, kind: str, exclude: list[str] = ()) -> dict:
+    """As many tickers as this machine can handle, for training ("train") or
+    for batch tests ("batch"). The two never overlap: training gets the
+    starter universe then the unreserved listed companies; batch tests get
+    the holdout tickers then the reserved ones, minus `exclude` (the model's
+    own training tickers)."""
+    listed = _listed(sec)
+    cik_of = dict(listed)
+    starter, holdout = set(STARTER_UNIVERSE), set(HOLDOUT_TICKERS)
+    if kind == "train":
+        limit = config.AUTOFILL_TRAIN_TICKERS
+        pool = STARTER_UNIVERSE + [
+            s for s, _ in listed if s not in holdout and not _reserved_for_tests(s)
+        ]
+    else:
+        limit = config.AUTOFILL_BATCH_TICKERS
+        pool = HOLDOUT_TICKERS + [s for s, _ in listed if s not in starter and _reserved_for_tests(s)]
+    skip = {normalize_symbol(s) for s in exclude}
+
+    def usable(symbol: str) -> bool:
+        # The curated lists are known 10-Q filers; check everything else.
+        if symbol in starter or symbol in holdout:
+            return True
+        try:
+            return sec.files_10q(cik_of[symbol])
+        except SECAPIError:
+            return False
+
+    free_mb = shutil.disk_usage(config.CACHE_DIR).free / 2**20 if config.CACHE_ENABLED else float("inf")
+    budget_mb = free_mb - config.AUTOFILL_DISK_RESERVE_GB * 1024
+    candidates = [s for s in dict.fromkeys(pool) if s not in skip]  # de-duplicated, order kept
+    chosen, new, foreign, out_of_disk = [], 0, 0, False
+    # Checked in chunks, a few at a time (SECClient keeps the overall rate
+    # under EDGAR's limit), stopping once the list is full.
+    with ThreadPoolExecutor(max_workers=4) as pool_exec:
+        for start in range(0, len(candidates), 40):
+            if len(chosen) >= limit or out_of_disk:
+                break
+            chunk = candidates[start:start + 40]
+            for symbol, ok in zip(chunk, pool_exec.map(usable, chunk)):
+                if len(chosen) >= limit:
+                    break
+                if not ok:
+                    foreign += 1
+                    continue
+                cik = cik_of.get(symbol)
+                if not (cik and sec.has_cached_facts(cik)):
+                    if budget_mb < NEW_TICKER_MB:
+                        out_of_disk = True
+                        break
+                    budget_mb -= NEW_TICKER_MB
+                    new += 1
+                chosen.append(symbol)
+
+    what = "training" if kind == "train" else "batch testing"
+    note = f"{len(chosen)} tickers for {what}; {len(chosen) - new} already cached, {new} to download (~{new * NEW_TICKER_MB / 1024:.1f} GB)."
+    if out_of_disk:
+        note += f" Stopped early to keep {config.AUTOFILL_DISK_RESERVE_GB:g} GB of disk free."
+    elif len(chosen) >= limit:
+        note += f" That's the cap for this machine ({limit})."
+    if foreign:
+        note += f" Skipped {foreign} that don't file 10-Q/10-K reports (mostly foreign companies)."
+    if skip:
+        note += f" Left out the model's {len(skip)} training tickers."
+    return {"symbols": chosen, "note": note, "new_downloads": new}

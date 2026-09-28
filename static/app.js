@@ -90,6 +90,27 @@ el("load-holdout")?.addEventListener("click", async () => {
   el("batch-tickers").value = u.holdout.join(", ");
 });
 
+async function autofill(url, textareaId, noteId) {
+  const note = el(noteId);
+  note.textContent = "Picking tickers (the first time downloads EDGAR's company list)...";
+  try {
+    const res = await fetch(url);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || "Auto-fill failed");
+    el(textareaId).value = body.symbols.join(", ");
+    note.textContent = body.note;
+  } catch (err) {
+    note.textContent = err.message;
+  }
+}
+
+el("autofill-train")?.addEventListener("click", () => autofill("/api/autofill/train", "tickers", "autofill-train-note"));
+
+el("autofill-batch")?.addEventListener("click", () => {
+  const modelId = el("batch-model").value;
+  autofill(`/api/autofill/batch?model_id=${encodeURIComponent(modelId)}`, "batch-tickers", "autofill-batch-note");
+});
+
 // --------------------------------------------------------------- training
 const trainForm = el("train-form");
 if (trainForm) {

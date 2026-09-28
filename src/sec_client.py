@@ -27,6 +27,7 @@ from .disk_cache import DiskCache
 logger = logging.getLogger(__name__)
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+EXCHANGE_TICKERS_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/{name}"
 FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 
@@ -123,6 +124,15 @@ class SECClient:
             raise SECAPIError(f"Ticker {symbol} not found in EDGAR's ticker list")
         return cik
 
+    def get_listed_companies(self) -> list[dict]:
+        """Every ticker EDGAR knows, with its exchange: [{cik, name, ticker,
+        exchange}], in EDGAR's order (roughly largest company first)."""
+        raw = self._get(EXCHANGE_TICKERS_URL)
+        return [dict(zip(raw["fields"], row)) for row in raw["data"]]
+
+    def has_cached_facts(self, cik: int) -> bool:
+        return self.cache.has(FACTS_URL.format(cik=f"{cik:010d}"))
+
     # -------------------------------------------------------------- submissions
     def get_filings(self, cik: int) -> list[dict]:
         """Full filing history as a list of dicts (one per filing), oldest
@@ -138,6 +148,12 @@ class SECClient:
             for values in zip(*(page[k] for k in keys)):
                 filings.append(dict(zip(keys, values)))
         return filings
+
+    def files_10q(self, cik: int) -> bool:
+        """Whether the company's recent filings include a 10-Q or 10-K
+        (foreign issuers file 20-F/40-F instead, which the pipeline can't use)."""
+        root = self._get(SUBMISSIONS_URL.format(name=f"CIK{cik:010d}.json"))
+        return bool({"10-Q", "10-K"} & set(root["filings"]["recent"].get("form", [])))
 
     def get_company_profile(self, cik: int) -> dict:
         """Name and SIC industry code from the submissions header (same

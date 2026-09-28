@@ -34,7 +34,9 @@ import tensorflow as tf
 from .config import config
 from .data_pipeline import FEATURE_GROUPS, RANK_FEATURES, VS_TREND_FEATURES, build_training_dataset, horizon_features
 from .diagnostics import build_diagnostics, training_profile
-from .model import HORIZON_LABELS, evaluate_predictions, predict_network, train_gbm, train_network
+from .model import (
+    HORIZON_LABELS, evaluate_predictions, network_learning_rate, predict_network, train_gbm, train_network,
+)
 from .preprocessing import HorizonTarget, RobustPreprocessor
 from .price_client import PriceClient
 from .sec_client import SECClient
@@ -298,6 +300,7 @@ def _run(run_id, symbols, epochs, batch_size, name, model_type):
         run_config = {
             "name": model_name, "model_type": model_type, "version": MODEL_VERSION,
             "epochs": epochs, "batch_size": batch_size, "benchmark": config.BENCHMARK_SYMBOL,
+            "nn_learning_rate": round(network_learning_rate(batch_size), 6),
         }
         db_run_id = db.create_training_run(symbols, run_config)
         _set_status(run_id, db_run_id=db_run_id, model_name=model_name)

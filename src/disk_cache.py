@@ -29,6 +29,11 @@ class DiskCache:
         safe = "".join(c if c.isalnum() else "_" for c in key)[:60]
         return self.dir / f"{safe}_{digest}.json"
 
+    def has(self, key: str) -> bool:
+        """Whether a file exists for `key`, fresh or not (an expired file is
+        overwritten in place, so re-fetching it costs no extra disk)."""
+        return self.enabled and self._path(key).exists()
+
     def get(self, key: str) -> Any | None:
         if not self.enabled:
             return None

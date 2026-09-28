@@ -75,8 +75,13 @@ class Config:
     HOLD_BAND_STD = float(_require("HOLD_BAND_STD", 0.25))
     # Companies needed in a calendar quarter before peer percentiles are used.
     MIN_PEERS_PER_QUARTER = 8
-    MAX_TRAINING_TICKERS = 600
+    MAX_TRAINING_TICKERS = 1000
     MAX_BATCH_TICKERS = 200
+    # Auto-fill: how many tickers to pick, and free disk to leave untouched
+    # after the SEC downloads they need (~5 MB per ticker not yet cached).
+    AUTOFILL_TRAIN_TICKERS = min(int(_require("AUTOFILL_TRAIN_TICKERS", 1000)), MAX_TRAINING_TICKERS)
+    AUTOFILL_BATCH_TICKERS = min(int(_require("AUTOFILL_BATCH_TICKERS", MAX_BATCH_TICKERS)), MAX_BATCH_TICKERS)
+    AUTOFILL_DISK_RESERVE_GB = float(_require("AUTOFILL_DISK_RESERVE_GB", 5))
 
     # Local scratch space for models before they're uploaded to Supabase Storage.
     LOCAL_MODEL_DIR = _require(

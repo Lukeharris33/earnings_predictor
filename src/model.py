@@ -31,7 +31,17 @@ HORIZON_LABELS = list(config.HORIZONS.keys())
 
 
 # ------------------------------------------------------------------ network
-def build_network(input_dim: int, seed: int = 0) -> tf.keras.Model:
+BASE_LEARNING_RATE = 1e-3  # at the default batch size
+
+
+def network_learning_rate(batch_size: int) -> float:
+    """Adam's learning rate scaled with the square root of the batch size
+    (bigger batches give less noisy gradients, so can take bigger steps),
+    anchored so the default batch size keeps BASE_LEARNING_RATE."""
+    return BASE_LEARNING_RATE * (batch_size / config.DEFAULT_BATCH_SIZE) ** 0.5
+
+
+def build_network(input_dim: int, seed: int = 0, learning_rate: float = BASE_LEARNING_RATE) -> tf.keras.Model:
     tf.keras.utils.set_random_seed(seed)
     l2 = regularizers.l2(1e-4)
     inputs = layers.Input(shape=(input_dim,), name="earnings_features")
@@ -43,7 +53,7 @@ def build_network(input_dim: int, seed: int = 0) -> tf.keras.Model:
 
     model = models.Model(inputs, outputs, name="earnings_move_predictor")
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
         # Huber is robust to the fat-tailed outliers common in earnings-day
         # price moves (a handful of +/-30% gaps shouldn't dominate the loss).
         loss=tf.keras.losses.Huber(delta=1.0),
@@ -62,7 +72,7 @@ def train_network(
     (rows arrive sorted by date), so stopping never peeks at the future."""
     split = int(len(X) * (1 - config.VALIDATION_FRACTION))
     split = min(max(split, 1), len(X) - 1)
-    model = build_network(X.shape[1], seed)
+    model = build_network(X.shape[1], seed, network_learning_rate(batch_size))
     model.fit(
         X[:split], y[:split],
         validation_data=(X[split:], y[split:]),
