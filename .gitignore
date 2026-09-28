@@ -5,4 +5,4 @@ venv/
 /tmp/
 *.keras
 *.joblib
-data/cache/
+data/cache/sec/

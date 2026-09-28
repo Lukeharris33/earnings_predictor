@@ -34,11 +34,15 @@ class DiskCache:
         overwritten in place, so re-fetching it costs no extra disk)."""
         return self.enabled and self._path(key).exists()
 
-    def get(self, key: str) -> Any | None:
+    def get(self, key: str, ignore_ttl: bool = False) -> Any | None:
         if not self.enabled:
             return None
-        path = self._path(key)
-        if not path.exists() or time.time() - path.stat().st_mtime > self.ttl_seconds:
+        return self.read_path(self._path(key), ignore_ttl)
+
+    def read_path(self, path: Path, ignore_ttl: bool = True) -> Any | None:
+        if not path.exists():
+            return None
+        if not ignore_ttl and time.time() - path.stat().st_mtime > self.ttl_seconds:
             return None
         try:
             with path.open("r", encoding="utf-8") as fh:

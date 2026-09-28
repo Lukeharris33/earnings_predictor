@@ -10,6 +10,7 @@ close scaled back to the share count the filing reported.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 
@@ -49,8 +50,16 @@ class PriceClient:
         key = f"{symbol}|{date_from}|{date_to}"
         cached = self.cache.get(key)
         if cached is None:
-            cached = self._download(symbol, date_from, date_to)
-            self.cache.set(key, cached)
+            try:
+                cached = self._download(symbol, date_from, date_to)
+                self.cache.set(key, cached)
+            except PriceAPIError:
+                # Yahoo blocks some hosts (e.g. Render); serve the newest cached
+                # series for this symbol, since the key embeds today's date.
+                cached = self._stale_prices(symbol, date_from, date_to)
+                if cached is None:
+                    raise
+                logger.warning("Using stale cached prices for %s", symbol)
         if not cached:
             return pd.DataFrame({"adj_close": [], "close": []}, dtype="float64")
         dates, adj, close = zip(*cached)
@@ -64,10 +73,15 @@ class PriceClient:
         key = f"splits|{symbol}"
         cached = self.cache.get(key)
         if cached is None:
-            cached = self._with_retries(
-                symbol, lambda: [[d.strftime("%Y-%m-%d"), float(r)] for d, r in yf.Ticker(symbol).splits.items() if r]
-            )
-            self.cache.set(key, cached)
+            try:
+                cached = self._with_retries(
+                    symbol, lambda: [[d.strftime("%Y-%m-%d"), float(r)] for d, r in yf.Ticker(symbol).splits.items() if r]
+                )
+                self.cache.set(key, cached)
+            except PriceAPIError:
+                cached = self.cache.get(key, ignore_ttl=True)
+                if cached is None:
+                    raise
         if not cached:
             return pd.Series(dtype="float64")
         dates, ratios = zip(*cached)
@@ -104,6 +118,29 @@ class PriceClient:
         with PriceClient._live_lock:
             PriceClient._live_cache[key] = (now, quotes)
         return quotes
+
+    def _stale_prices(self, symbol: str, date_from: str, date_to: str) -> list[list] | None:
+        """Rows from the cached file for `symbol` with the latest end date,
+        trimmed to [date_from, date_to). None if nothing is cached."""
+        if not self.cache.enabled:
+            return None
+        safe = "".join(c if c.isalnum() else "_" for c in symbol)
+        pattern = re.compile(re.escape(safe) + r"_(\d{4}_\d{2}_\d{2})_(\d{4}_\d{2}_\d{2})_[0-9a-f]{24}\.json$")
+        want_from = date_from.replace("-", "_")
+        candidates = []  # (start, end, path)
+        for path in self.cache.dir.glob(f"{safe}_*.json"):
+            m = pattern.match(path.name)
+            if m:
+                candidates.append((m.group(1), m.group(2), path))
+        if not candidates:
+            return None
+        # Prefer files covering date_from, then the latest end, then the earliest start.
+        candidates.sort()
+        best = max(candidates, key=lambda c: (c[0] <= want_from, c[1]))
+        rows = self.cache.read_path(best[2])
+        if rows is None:
+            return None
+        return [r for r in rows if date_from <= r[0] < date_to]
 
     def _download(self, symbol: str, date_from: str, date_to: str) -> list[list]:
         def fetch():
